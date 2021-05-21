@@ -149,43 +149,7 @@ int main(int argc, char **argv)
     tree->Update();
     cout << "done" << endl;
 
-    // sample quaternions
-    vector<vtkQuaterniond> quaternions;
-    int sampleN(0);
     srand(time(nullptr));
-    cout << "Sampling mother quaternions..." << flush;
-    for (int i = 0; i < sampleN; i++)
-    {
-        double u1 = (double)rand() / RAND_MAX;
-        double u2 = (double)rand() / RAND_MAX;
-        double u3 = (double)rand() / RAND_MAX;
-        double w = sqrt(1 - u1) * sin(2 * pi * u2);
-        double x = sqrt(1 - u1) * cos(2 * pi * u2);
-        double y = sqrt(u1) * sin(2 * pi * u3);
-        double z = sqrt(u1) * cos(2 * pi * u3);
-        vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
-        quaternions.push_back(q);
-        quaternions.push_back(q.Conjugated());
-    }
-    cout << "done" << endl;
-
-    int sampleN_large(150000);
-    vector<vtkQuaterniond> quaternions_large;
-    cout << "Sampling daughter quaternions..." << flush;
-    for (int i = 0; i < sampleN_large; i++)
-    {
-        double u1 = (double)rand() / RAND_MAX;
-        double u2 = (double)rand() / RAND_MAX;
-        double u3 = (double)rand() / RAND_MAX;
-        double w = sqrt(1 - u1) * sin(2 * pi * u2);
-        double x = sqrt(1 - u1) * cos(2 * pi * u2);
-        double y = sqrt(u1) * sin(2 * pi * u3);
-        double z = sqrt(u1) * cos(2 * pi * u3);
-        vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
-        quaternions_large.push_back(q);
-        quaternions_large.push_back(q.Conjugated());
-    }
-    cout << "done" << endl;
 
     // Virtual camera parameters
     double viewray0[3] = {0.0, 0.0, 1.0};
@@ -200,21 +164,22 @@ int main(int argc, char **argv)
     //Initialize LINEMOD detector
     cv::Ptr<cv::linemod::Detector> detector = readLinemod("mother.yml");
     cout << "read mother detector.." << detector->numTemplates() << " templates" << endl;
-    //detector = cv::linemod::getDefaultLINEMOD();
     cv::Ptr<cv::linemod::Detector> detector1 = readLinemod("daughter.yml");
     cout << "read daughter detector.." << detector1->numTemplates() << " templates" << endl;
-    //detector1 = cv::linemod::getDefaultLINEMOD();
     int num_modalities = (int)detector->getModalities().size();
+    map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels = readLabel("mother.label");
+    map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels1 = readLabel("daughter.label");
 
-    //main loop start
-    // if (path != ".")
-    //     system(("mkdir " + path).c_str());
-    // ofstream log(path + "/labels.txt");
-    // log << "maxDist " << maxDist << endl;
-    // log << "minDist " << minDist << endl;
-    // log << "model " << modelFileName << endl;
-    // log << "viewpoint " << viewFileName << endl
-    //     << endl;
+    cout << "set ROI..." << flush;
+    int maxX(0), maxY(0);
+    for (auto label : labels)
+    {
+        maxX = maxX > label.second.second.x ? maxX : label.second.second.x;
+        maxY = maxY > label.second.second.y ? maxY : label.second.second.y;
+    }
+    cv::Rect roi(cv::Point2i(scan.res_hor * 0.5 - maxX - 20, scan.res_vert * 0.5 - maxY - 20),
+                 cv::Point2i(scan.res_hor * 0.5 + maxX + 20, scan.res_vert * 0.5 + maxY + 20));
+    cout << "done" << endl;
 
     vector<double *> screen;
     double lu_x = -hor_len * 0.5;
@@ -227,7 +192,6 @@ int main(int argc, char **argv)
             screen.push_back(new double[3]{lu_x + hor_interval * hor, lu_y + vert_interval * vert, lu_z});
         }
     }
-    double eye[3] = {0, 0, -scan.distance};
     double viewRay[3] = {0, 0, 1};
 
     int failCount(0);
@@ -235,7 +199,7 @@ int main(int argc, char **argv)
     cv::Rect bBox_all(cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5), cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5));
     int maxH(scan.res_hor * 0.5), minH(scan.res_hor * 0.5), maxV(scan.res_vert * 0.5), minV(scan.res_vert * 0.5);
     cv::Point2i center(maxH, maxV);
-    function<void(vtkQuaterniond, cv::Mat &, cv::Mat &, cv::Mat &)> generateImg = [&](vtkQuaterniond q, cv::Mat &color, cv::Mat &depth, cv::Mat &mask)
+    function<void(vtkQuaterniond, double, cv::Mat &, cv::Mat &, cv::Mat &)> generateImg = [&](vtkQuaterniond q, double d, cv::Mat &color, cv::Mat &depth, cv::Mat &mask)
     {
         double axis[3];
         double angle = q.GetRotationAngleAndAxis(axis);
@@ -244,6 +208,7 @@ int main(int argc, char **argv)
         tr->Inverse();
 
         //Start!!
+        double eye[3] = {0, 0, -d};
         double eye1[3], viewRay1[3];
         tr->TransformPoint(eye, eye1);
         tr->TransformPoint(viewRay, viewRay1);
@@ -277,227 +242,121 @@ int main(int argc, char **argv)
         }     // Vertical
     };
 
-    function<cv::Point2i(cv::Ptr<cv::linemod::Detector> &, int classID, std::vector<cv::Mat>, cv::Mat &, cv::Mat &, int &templateID)> train = [&](cv::Ptr<cv::linemod::Detector> &det, int classID, std::vector<cv::Mat> sources, cv::Mat &mask, cv::Mat &display, int &templateID) -> cv::Point2i
-    {
-        //addTemplate (LINEMOD)
-        cv::Rect bBox;
-        templateID = det->addTemplate(sources, to_string(classID), mask, &bBox);
-        cv::Point2i isocenter;
-        if (templateID >= 0)
-        {
-            const std::vector<cv::linemod::Template> &templates = det->getTemplates(to_string(classID), templateID);
-            drawResponse(templates, num_modalities, display, cv::Point(bBox.x, bBox.y), det->getT(0));
-            isocenter = center - bBox.tl();
-            if (minV > bBox.y)
-                minV = bBox.y;
-            if (maxV < bBox.y + bBox.height)
-                maxV = bBox.y + bBox.height;
-            if (minH > bBox.x)
-                minH = bBox.x;
-            if (maxH < bBox.x + bBox.width)
-                maxH = bBox.x + bBox.width;
-            bBox_all.x = minH;
-            bBox_all.y = minV;
-            bBox_all.width = maxH - minH;
-            bBox_all.height = maxV - minV;
-            cv::rectangle(display, bBox_all, cv::Scalar(255., 255., 0., 0.));
-            cv::rectangle(display, bBox, cv::Scalar(255., 0., 0., 0.));
-            cv::putText(display, "isocenter: " + to_string(isocenter.x) + ", " + to_string(isocenter.y),
-                        bBox_all.tl() - cv::Point2i(0, 2), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 0), 1);
-        }
-        else
-            failCount++;
+    Timer timer, timer1;
+    //sample a depth
+    //double iso_depth = (double)rand() / RAND_MAX * 2000. + 2000.;
+    double iso_depth = 3000;
+    double iso_depth1 = 2000.;
+    double interval = 10;
+    double sf, sf_inv;
+    bool first(true);
+    int id(0);
+    while (1)
+    { //sample a random quaternion
+        double u1 = (double)rand() / RAND_MAX;
+        double u2 = (double)rand() / RAND_MAX;
+        double u3 = (double)rand() / RAND_MAX;
+        double w = sqrt(1 - u1) * sin(2 * pi * u2);
+        double x = sqrt(1 - u1) * cos(2 * pi * u2);
+        double y = sqrt(u1) * sin(2 * pi * u3);
+        double z = sqrt(u1) * cos(2 * pi * u3);
+        vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
 
-        return isocenter;
-    };
-
-    map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels = readLabel("mother.label");
-    int skipCounter(0);
-    Timer timer;
-    for (size_t i = 0; i < quaternions.size(); i++)
-    { //quaternion loop
-        cout << "\rScanning mother quaternion# " << i + 1 << "/" << quaternions.size() << flush;
         cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
         cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
         cv::Mat mask(scan.res_vert, scan.res_hor, CV_8U, cv::Scalar::all(0));
-        generateImg(quaternions[i], color, depth, mask);
+        generateImg(q, iso_depth, color, depth, mask);
+
         std::vector<cv::Mat> sources;
         sources.push_back(color);
         sources.push_back(depth);
-        cv::Mat display = color;
+        sources[1] = (sources[1] - minDist) * depthFactor;
 
         std::vector<cv::linemod::Match> matches;
         std::vector<cv::String> class_ids;
         std::vector<cv::Mat> quantized_images;
-        sources[1] = (sources[1] - minDist) * depthFactor;
         timer.start();
-        detector->match(sources, 70., matches, class_ids, quantized_images);
+        detector->match(sources, 65., matches, class_ids, quantized_images);
         timer.stop();
-        if (matches.size() > 0)
-        {
-            pair<vtkQuaterniond, cv::Point2i> label = labels[make_pair(matches[0].class_id, 0)];
-            double dotProd = label.first.GetW() * quaternions[i].GetW() + label.first.GetX() * quaternions[i].GetX() + label.first.GetY() * quaternions[i].GetY() + label.first.GetZ() * quaternions[i].GetZ();
-            double quatDiff = 1 - dotProd * dotProd;
-            cv::putText(display, "quatDiff: " + to_string(quatDiff),
-                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-            cv::putText(display, "detect time: " + to_string(timer.time()),
-                        cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-            if (quatDiff > 0.2)
-            {
-                int template_id;
-                int class_id = labels.size();
-                cv::Point2i iso = train(detector, class_id, sources, mask, display, template_id);
-                labels[make_pair(to_string(class_id), template_id)] = make_pair(quaternions[i], iso);
-            }
-            else
-            {
-                const std::vector<cv::linemod::Template> &templates = detector->getTemplates(matches[0].class_id, matches[0].template_id);
-                drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector->getT(0));
-                cv::imshow("color", display);
-                skipCounter++;
-            }
-        }
-        else
-        {
-            int template_id;
-            int class_id = labels.size();
-            cv::Point2i iso = train(detector, class_id, sources, mask, display, template_id);
-            labels[make_pair(to_string(class_id), template_id)] = make_pair(quaternions[i], iso);
-        }
-        cv::putText(display, "skip #" + to_string(skipCounter),
-                    cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-        cv::putText(display, to_string(i) + "/" + to_string(quaternions.size()) + " (failed: " + to_string(failCount) + ")",
+
+        cv::Mat display = color;
+        cv::putText(display, to_string(id++) + " (fail: " + to_string(failCount) + ")",
                     cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-        cv::imshow("color", display);
-
-        char key = (char)cv::waitKey(1);
-        if (key == 'q')
-            break;
-
-        switch (key)
+        function<double(vtkQuaterniond, vtkQuaterniond)> getAngle = [](vtkQuaterniond a, vtkQuaterniond b) -> double
         {
-        case 'p':
-            cout << endl
-                 << "p -> pause press any key " << failCount << endl;
-            cv::waitKey();
-            break;
-
-        default:;
+            double dotProd = a.GetW() * b.GetW() + a.GetX() * b.GetX() + a.GetY() * b.GetY() + a.GetZ() * b.GetZ();
+            return 2 * acos(fabs(dotProd)) * 180 / pi;
+        };
+        cv::linemod::Match match0;
+        if (matches.size())
+        {
+            match0 = matches[0];
         }
-    }
-
-    // writeLinemod(detector, "mother.yml");
-    // writeLabel(labels, "mother.label");
-    map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels1  = readLabel("daughter.label");
-    skipCounter = 0;
-    failCount = 0;
-    Timer timer1;
-    for (size_t i = 0; i < quaternions_large.size(); i++)
-    { //quaternion loop
-        cout << "\rScanning dauther quaternion# " << i + 1 << "/" << quaternions_large.size()<< flush;
-        cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
-        cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
-        cv::Mat mask(scan.res_vert, scan.res_hor, CV_8U, cv::Scalar::all(0));
-        generateImg(quaternions_large[i], color, depth, mask);
-        std::vector<cv::Mat> sources;
-        sources.push_back(color);
-        sources.push_back(depth);
-        sources[1] = (sources[1] - minDist) * depthFactor;
-
-        cv::Mat display = color;
-        std::vector<cv::linemod::Match> matches;
-        std::vector<cv::String> class_ids;
-        std::vector<cv::Mat> quantized_images;
-        timer.start();
-        detector->match(sources, 50., matches, class_ids, quantized_images);
-        timer.stop();
-        int m_id = 0;
-        double dotProd;
-        pair<vtkQuaterniond, cv::Point2i> label;
-        for (; m_id < matches.size(); m_id++)
+        else
         {
-            label = labels[make_pair(matches[m_id].class_id, matches[m_id].template_id)];
-            dotProd = label.first.GetW() * quaternions_large[i].GetW() + label.first.GetX() * quaternions_large[i].GetX() + label.first.GetY() * quaternions_large[i].GetY() + label.first.GetZ() * quaternions_large[i].GetZ();
-            if (fabs(dotProd) > 0.93)
+            failCount++;
+            char key = cv::waitKey(1);
+            if (key == 'p')
+                cv::waitKey(0);
+            else if(key=='q')
                 break;
+                
+            cv::imshow("display", display);
+            continue;
         }
-        if (m_id < matches.size())
+
+        for (auto m : matches)
+            class_ids.push_back(m.class_id);
+
+        timer1.start();
+        detector1->match(sources, 80., matches, class_ids, quantized_images);
+        timer1.stop();
+
+        pair<vtkQuaterniond, cv::Point2i> label1;
+        if (matches.size() && match0.similarity < matches[0].similarity)
         {
-            class_ids = {matches[m_id].class_id};
-            std::vector<cv::linemod::Match> matches1;
-            cv::linemod::Match match;
-            timer1.start();
-            detector1->match(sources, 90, matches1, class_ids, quantized_images);
-            timer1.stop();
-            if (m_id == matches.size())
-                failCount++;
-            else if ((matches1.size() == 0) || matches1[0].similarity < 99.5)
-            {
-                int template_id;
-                cv::Point2i iso = train(detector1, atoi(matches[m_id].class_id.c_str()), sources, mask, display, template_id);
-                labels1[make_pair(matches[m_id].class_id, template_id)] = make_pair(quaternions_large[i], iso);
-                match = matches[m_id];
-            }
-            else
-            {
-                const std::vector<cv::linemod::Template> &templates = detector1->getTemplates(matches1[0].class_id, matches1[0].template_id);
-                drawResponse(templates, num_modalities, display, cv::Point2i(matches1[0].x, matches1[0].y), detector1->getT(0));
-                label = labels1[make_pair(matches1[0].class_id, matches1[0].template_id)];
-                dotProd = label.first.GetW() * quaternions_large[i].GetW() + label.first.GetX() * quaternions_large[i].GetX() + label.first.GetY() * quaternions_large[i].GetY() + label.first.GetZ() * quaternions_large[i].GetZ();
-                match = matches1[0];
-                skipCounter++;
-            }
-            double theta = acos(2 * dotProd * dotProd - 1);
-            cv::putText(display, "quat diff: " + to_string(1 - dotProd * dotProd) + " (" + to_string(theta / pi * 180) + "`)",
-                        cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-            cv::putText(display, "center diff: " + to_string(match.x + label.second.x - center.x) + ", " + to_string(match.y + label.second.y - center.y),
+            label1 = labels1[make_pair(matches[0].class_id, matches[0].template_id)];
+            cv::putText(display, "similarity2: " + to_string(matches[0].similarity) + " (" + to_string(getAngle(label1.first, q)) + " deg.)",
                         cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-            cv::putText(display, "similarity: " + to_string(match.similarity),
-                        cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+            cv::putText(display, "center diff2: " + to_string(matches[0].x + label1.second.x - center.x) + ", " + to_string(matches[0].y + label1.second.y - center.y),
+                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+            const std::vector<cv::linemod::Template> &templates = detector1->getTemplates(matches[0].class_id, matches[0].template_id);
+            drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector1->getT(0));
         }
         else
         {
-            const std::vector<cv::linemod::Template> &templates = detector->getTemplates(matches[0].class_id, matches[0].template_id);
-            drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector1->getT(0));
-            cout<<m_id<<endl;
-            cv::imshow("color", display);
-            cv::waitKey(0);
-            failCount++;
+            cv::putText(display, "similarity2: -",
+                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+            cv::putText(display, "center diff2: -",
+                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+            const std::vector<cv::linemod::Template> &templates = detector->getTemplates(match0.class_id, match0.template_id);
+            drawResponse(templates, num_modalities, display, cv::Point2i(match0.x, match0.y), detector->getT(0));
         }
+
+        pair<vtkQuaterniond, cv::Point2i> label0 = labels[make_pair(match0.class_id, match0.template_id)];
+
+        cv::putText(display, "similarity1: " + to_string(match0.similarity) + " (" + to_string(getAngle(label0.first, q)) + " deg.)",
+                    cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+        cv::putText(display, "center diff1: " + to_string(match0.x + label0.second.x - center.x) + ", " + to_string(match0.y + label0.second.y - center.y),
+                    cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
         cv::putText(display, "detect time: " + to_string(timer.time()) + " / " + to_string(timer1.time()),
-                    cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-        cv::putText(display, "skip #" + to_string(skipCounter) + " / fail #" + to_string(failCount),
                     cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-        cv::putText(display, to_string(i) + "/" + to_string(quaternions_large.size()) + " (picked class: " + to_string(m_id) + ")",
-                    cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-        cv::imshow("color", display);
 
-        char key = (char)cv::waitKey(1);
-        if (key == 'q')
+        char key = cv::waitKey(1);
+        if (key == 'p')
+            cv::waitKey(0);
+        else if(key=='q')
             break;
 
-        switch (key)
-        {
-        case 'p':
-            cout << endl
-                 << "p -> pause press any key " << failCount << endl;
-            cv::waitKey();
-            break;
-
-        default:;
-        }
+        cv::imshow("display", display);
     }
-    writeLinemod(detector1, "daughter.yml");
-    writeLabel(labels1, "daughter.label");
+    // }
+    // log.close();
+    // writeLinemod(detector, path + "/" + "templates.yml");
+    // cout << endl
+    //      << "failed for " << failCount << " templates" << endl;*/
     return 0;
 }
-// }
-// log.close();
-// writeLinemod(detector, path + "/" + "templates.yml");
-// cout << endl
-//      << "failed for " << failCount << " templates" << endl;*/
-//     return 0;
-// }
 
 void EstimateColor(vtkPolyData *poly, vtkIdType cellId, double *point, double *rgb)
 {
