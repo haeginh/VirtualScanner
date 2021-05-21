@@ -242,8 +242,8 @@ int main(int argc, char **argv)
 
     Timer timer, timer1;
     //sample a depth
-    //double iso_depth = (double)rand() / RAND_MAX * 2000. + 2000.;
-    double iso_depth = 3000;
+    double iso_depth = (double)rand() / RAND_MAX * 2000. + 2000.;
+    //double iso_depth = 3000;
     double iso_depth1 = 2000.;
     double interval = 10;
     double sf, sf_inv;
@@ -262,6 +262,8 @@ int main(int argc, char **argv)
 
         cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
         cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
+        cv::Mat depth0 = depth;
+        cv::Mat color0 = color;
         generateImg(q, iso_depth, color, depth);
 
         std::vector<cv::Mat> sources;
@@ -347,11 +349,6 @@ int main(int argc, char **argv)
 
         cv::imshow("display", display);
     }
-    // }
-    // log.close();
-    // writeLinemod(detector, path + "/" + "templates.yml");
-    // cout << endl
-    //      << "failed for " << failCount << " templates" << endl;*/
     return 0;
 }
 
