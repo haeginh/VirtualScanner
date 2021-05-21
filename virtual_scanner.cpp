@@ -199,7 +199,7 @@ int main(int argc, char **argv)
     cv::Rect bBox_all(cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5), cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5));
     int maxH(scan.res_hor * 0.5), minH(scan.res_hor * 0.5), maxV(scan.res_vert * 0.5), minV(scan.res_vert * 0.5);
     cv::Point2i center(maxH, maxV);
-    function<void(vtkQuaterniond, double, cv::Mat &, cv::Mat &, cv::Mat &)> generateImg = [&](vtkQuaterniond q, double d, cv::Mat &color, cv::Mat &depth, cv::Mat &mask)
+    function<void(vtkQuaterniond, double, cv::Mat &, cv::Mat &)> generateImg = [&](vtkQuaterniond q, double d, cv::Mat &color, cv::Mat &depth)
     {
         double axis[3];
         double angle = q.GetRotationAngleAndAxis(axis);
@@ -218,7 +218,6 @@ int main(int argc, char **argv)
         double p_coords[3], x[3], t, rgb[3];
         //create ::Mat for depth & color
         uchar *color_data = color.data;
-        uchar *mask_data = mask.data;
         int subId;
         for (int vert = 0, n = 0; vert < scan.res_vert; vert++)
         {
@@ -232,7 +231,6 @@ int main(int argc, char **argv)
                     double ep[3];
                     vtkMath::Subtract(x, eye1, ep);
                     depth.at<ushort>(vert, hor) = vtkMath::Dot(ep, viewRay1);
-                    mask_data[n] = 255;
                     EstimateColor(data, cellId, x, rgb);
                     color_data[n * 3 + 0] = floor(rgb[2] + 0.5);
                     color_data[n * 3 + 1] = floor(rgb[1] + 0.5);
@@ -264,8 +262,7 @@ int main(int argc, char **argv)
 
         cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
         cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
-        cv::Mat mask(scan.res_vert, scan.res_hor, CV_8U, cv::Scalar::all(0));
-        generateImg(q, iso_depth, color, depth, mask);
+        generateImg(q, iso_depth, color, depth);
 
         std::vector<cv::Mat> sources;
         sources.push_back(color);
