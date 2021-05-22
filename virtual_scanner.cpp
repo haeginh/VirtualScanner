@@ -218,6 +218,7 @@ int main(int argc, char **argv)
         double p_coords[3], x[3], t, rgb[3];
         //create ::Mat for depth & color
         uchar *color_data = color.data;
+
         int subId;
         for (int vert = 0, n = 0; vert < scan.res_vert; vert++)
         {
@@ -242,31 +243,16 @@ int main(int argc, char **argv)
 
     Timer timer, timer1;
     //sample a depth
-    double iso_depth = (double)rand() / RAND_MAX * 2000. + 2000.;
+    double iso_depth = (double)rand() / RAND_MAX * 1000. + 3000.;
     //double iso_depth = 3000;
     double iso_depth1 = 2000.;
     double interval = 10;
     double sf, sf_inv;
     bool first(true);
     int id(0);
-    while (1)
-    { //sample a random quaternion
-        double u1 = (double)rand() / RAND_MAX;
-        double u2 = (double)rand() / RAND_MAX;
-        double u3 = (double)rand() / RAND_MAX;
-        double w = sqrt(1 - u1) * sin(2 * pi * u2);
-        double x = sqrt(1 - u1) * cos(2 * pi * u2);
-        double y = sqrt(u1) * sin(2 * pi * u3);
-        double z = sqrt(u1) * cos(2 * pi * u3);
-        vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
 
-        cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
-        cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
-        cv::Mat depth0 = depth;
-        cv::Mat color0 = color;
-        generateImg(q, iso_depth, color, depth);
-
-        std::vector<cv::Mat> sources;
+    function<double(cv::Mat&, cv::Mat&, cv::Mat &, vtkQuaterniond)> detection = [&](cv::Mat &color, cv::Mat &depth, cv::Mat &display, vtkQuaterniond q)->double{
+       std::vector<cv::Mat> sources;
         sources.push_back(color);
         sources.push_back(depth);
         sources[1] = (sources[1] - minDist) * depthFactor;
@@ -277,8 +263,8 @@ int main(int argc, char **argv)
         timer.start();
         detector->match(sources, 65., matches, class_ids, quantized_images);
         timer.stop();
-
-        cv::Mat display = color;
+        cv::imshow("depth", quantized_images[1]);
+        color.copyTo(display);
         cv::putText(display, to_string(id++) + " (fail: " + to_string(failCount) + ")",
                     cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
         function<double(vtkQuaterniond, vtkQuaterniond)> getAngle = [](vtkQuaterniond a, vtkQuaterniond b) -> double
@@ -294,14 +280,7 @@ int main(int argc, char **argv)
         else
         {
             failCount++;
-            char key = cv::waitKey(1);
-            if (key == 'p')
-                cv::waitKey(0);
-            else if(key=='q')
-                break;
-                
-            cv::imshow("display", display);
-            continue;
+            return -1;
         }
 
         for (auto m : matches)
@@ -312,6 +291,7 @@ int main(int argc, char **argv)
         timer1.stop();
 
         pair<vtkQuaterniond, cv::Point2i> label1;
+        double similarity;
         if (matches.size() && match0.similarity < matches[0].similarity)
         {
             label1 = labels1[make_pair(matches[0].class_id, matches[0].template_id)];
@@ -321,6 +301,7 @@ int main(int argc, char **argv)
                         cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
             const std::vector<cv::linemod::Template> &templates = detector1->getTemplates(matches[0].class_id, matches[0].template_id);
             drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector1->getT(0));
+            similarity = matches[0].similarity;
         }
         else
         {
@@ -330,6 +311,7 @@ int main(int argc, char **argv)
                         cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
             const std::vector<cv::linemod::Template> &templates = detector->getTemplates(match0.class_id, match0.template_id);
             drawResponse(templates, num_modalities, display, cv::Point2i(match0.x, match0.y), detector->getT(0));
+            similarity = match0.similarity;
         }
 
         pair<vtkQuaterniond, cv::Point2i> label0 = labels[make_pair(match0.class_id, match0.template_id)];
@@ -340,11 +322,83 @@ int main(int argc, char **argv)
                     cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
         cv::putText(display, "detect time: " + to_string(timer.time()) + " / " + to_string(timer1.time()),
                     cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+        return similarity;
+    };
+
+    while (1)
+    { //sample a random quaternion
+        double u1 = (double)rand() / RAND_MAX;
+        double u2 = (double)rand() / RAND_MAX;
+        double u3 = (double)rand() / RAND_MAX;
+        double w = sqrt(1 - u1) * sin(2 * pi * u2);
+        double x = sqrt(1 - u1) * cos(2 * pi * u2);
+        double y = sqrt(u1) * sin(2 * pi * u3);
+        double z = sqrt(u1) * cos(2 * pi * u3);
+        vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
+
+        cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
+        cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
+        iso_depth = (double)rand() / RAND_MAX * 1000. + 3000.;
+        generateImg(q, iso_depth, color, depth);
+
+        cv::Mat depthTester(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
+        cv::Mat colorTester(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
+        generateImg(q, 3000., colorTester, depthTester);
+cv::imshow("cTest", colorTester);
+        if (first)
+        {
+            double distOpt(0);
+            int counter(0);
+            // for (double dist = 3000; dist < 4000; dist += 10)
+            // {
+                double dist = iso_depth;
+                double sf = scan.distance / dist;
+                cv::Mat colorResize, depthResize;
+                float* depthData = (float*)depth.data();
+
+                if (sf < 1)
+                {
+                    cv::Mat cropImg, cropDepth;
+                    color(cv::Rect(center - cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf),
+                                   center + cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf)))
+                        .copyTo(cropImg);
+                    depth(cv::Rect(center - cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf),
+                                   center + cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf)))
+                        .copyTo(cropDepth);
+                    cropDepth += scan.distance - dist;
+                    cv::resize(cropImg, colorResize, cv::Size2i(scan.res_hor, scan.res_vert));
+                    cv::resize(cropDepth, depthResize, cv::Size2i(scan.res_hor, scan.res_vert));
+                }
+                else if(sf>1)
+                {
+
+                }
+                else
+                {
+                    color.copyTo(colorResize);
+                    depth.copyTo(depthResize);
+                }
+                cv::Mat disp0;
+                double similarity = detection(colorResize, depthResize, disp0, q);
+                if(similarity>95){
+                    distOpt = distOpt * counter++;
+                    distOpt = (distOpt + dist) / counter;
+                }
+                cv::imshow("display", disp0);
+                cv::waitKey(0);
+//            }
+            cout<<"opt dist = "<<distOpt<<endl;
+            cout<<"real dist = "<<iso_depth<<endl;
+            cout<<"count = "<<counter<<endl;
+        }
+
+        cv::Mat display;
+        detection(color, depth, display, q);
 
         char key = cv::waitKey(1);
         if (key == 'p')
             cv::waitKey(0);
-        else if(key=='q')
+        else if (key == 'q')
             break;
 
         cv::imshow("display", display);
