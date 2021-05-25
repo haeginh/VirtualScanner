@@ -79,7 +79,7 @@ void PrintUsage()
     cout << "\t-path <string> : directory path for result files (default: .)" << endl;
     cout << "\t-cv   [depth/color/both] : print openCV matrix in YML" << endl;
     cout << "\t-ply  [0/1]    : print point cloud w/ color in PLY [0:object fixed/1:camera fixed]" << endl;
-    cout << "\t-pcd  [0/1]    : quick print of point cloud w/o color in PCD [0:object fixed/1:camera fixed]" << endl;
+    cout << "\t-pcd  [0/1]    : quick print of point cloud w/xphoto/inpainting.hppo color in PCD [0:object fixed/1:camera fixed]" << endl;
     exit(1);
 }
 void PrintKeyUsage()
@@ -139,6 +139,7 @@ int main(int argc, char **argv)
 
     cout << "Initializing mesh..." << flush;
     // Build a spatial locator for our dataset
+#include "vtkTransform.h"
     vtkSmartPointer<vtkCellLocator> tree = vtkSmartPointer<vtkCellLocator>::New();
     tree->SetDataSet(data);
     tree->CacheCellBoundsOn();
@@ -154,12 +155,6 @@ int main(int argc, char **argv)
     // Virtual camera parameters
     double viewray0[3] = {0.0, 0.0, 1.0};
     double up0[3] = {0.0, 1.0, 0.0}; //normalize
-
-    // Screen parameters
-    double hor_len = scan.screen_dist * 2. * tan(scan.fov_hor * 0.5);
-    double vert_len = scan.screen_dist * 2. * tan(scan.fov_vert * 0.5);
-    double hor_interval = hor_len / (double)scan.res_hor;
-    double vert_interval = vert_len / (double)scan.res_vert;
 
     //Initialize LINEMOD detector
     cv::Ptr<cv::linemod::Detector> detector = readLinemod("mother.yml");
@@ -181,17 +176,33 @@ int main(int argc, char **argv)
                  cv::Point2i(scan.res_hor * 0.5 + maxX + 20, scan.res_vert * 0.5 + maxY + 20));
     cout << "done" << endl;
 
+    double eye[3] = {0, 0, -1};
     vector<double *> screen;
-    double lu_x = -hor_len * 0.5;
-    double lu_y = -vert_len * 0.5;
-    double lu_z = scan.screen_dist - scan.distance;
-    for (int vert = 0; vert < scan.res_vert; vert++)
+    for (int n = 0; n < scan.res_vert * scan.res_hor; n++)
+        screen.push_back(new double[3]{0, 0, 0});
+
+    function<void(double)> generateScreen = [&](double d)
     {
-        for (int hor = 0; hor < scan.res_hor; hor++)
+        eye[2] = -d;
+        // Screen parameters
+        double hor_len = (scan.screen_dist + d) * 2. * tan(scan.fov_hor * 0.5);
+        double vert_len = (scan.screen_dist + d) * 2. * tan(scan.fov_vert * 0.5);
+        double hor_interval = hor_len / (double)scan.res_hor;
+        double vert_interval = vert_len / (double)scan.res_vert;
+        double lu_x = -hor_len * 0.5;
+        double lu_y = -vert_len * 0.5;
+        double lu_z = scan.screen_dist;
+        for (int vert = 0, n = 0; vert < scan.res_vert; vert++)
         {
-            screen.push_back(new double[3]{lu_x + hor_interval * hor, lu_y + vert_interval * vert, lu_z});
+            for (int hor = 0; hor < scan.res_hor; hor++, n++)
+            {
+                screen[n][0] = lu_x + hor_interval * hor;
+                screen[n][1] = lu_y + vert_interval * vert;
+                screen[n][2] = lu_z;
+            }
         }
-    }
+    };
+
     double viewRay[3] = {0, 0, 1};
 
     int failCount(0);
@@ -199,7 +210,7 @@ int main(int argc, char **argv)
     cv::Rect bBox_all(cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5), cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5));
     int maxH(scan.res_hor * 0.5), minH(scan.res_hor * 0.5), maxV(scan.res_vert * 0.5), minV(scan.res_vert * 0.5);
     cv::Point2i center(maxH, maxV);
-    function<void(vtkQuaterniond, double, cv::Mat &, cv::Mat &)> generateImg = [&](vtkQuaterniond q, double d, cv::Mat &color, cv::Mat &depth)
+    function<void(vtkQuaterniond, cv::Mat &, cv::Mat &)> generateImg = [&](vtkQuaterniond q, cv::Mat &color, cv::Mat &depth)
     {
         double axis[3];
         double angle = q.GetRotationAngleAndAxis(axis);
@@ -208,7 +219,6 @@ int main(int argc, char **argv)
         tr->Inverse();
 
         //Start!!
-        double eye[3] = {0, 0, -d};
         double eye1[3], viewRay1[3];
         tr->TransformPoint(eye, eye1);
         tr->TransformPoint(viewRay, viewRay1);
@@ -218,6 +228,7 @@ int main(int argc, char **argv)
         double p_coords[3], x[3], t, rgb[3];
         //create ::Mat for depth & color
         uchar *color_data = color.data;
+        ushort *depth_data = (ushort *)depth.data;
 
         int subId;
         for (int vert = 0, n = 0; vert < scan.res_vert; vert++)
@@ -231,7 +242,7 @@ int main(int argc, char **argv)
                 {
                     double ep[3];
                     vtkMath::Subtract(x, eye1, ep);
-                    depth.at<ushort>(vert, hor) = vtkMath::Dot(ep, viewRay1);
+                    depth_data[n] = vtkMath::Dot(ep, viewRay1);
                     EstimateColor(data, cellId, x, rgb);
                     color_data[n * 3 + 0] = floor(rgb[2] + 0.5);
                     color_data[n * 3 + 1] = floor(rgb[1] + 0.5);
@@ -242,17 +253,10 @@ int main(int argc, char **argv)
     };
 
     Timer timer, timer1;
-    //sample a depth
-    double iso_depth = (double)rand() / RAND_MAX * 1000. + 3000.;
-    //double iso_depth = 3000;
-    double iso_depth1 = 2000.;
-    double interval = 10;
-    double sf, sf_inv;
-    bool first(true);
     int id(0);
-
-    function<double(cv::Mat&, cv::Mat&, cv::Mat &, vtkQuaterniond)> detection = [&](cv::Mat &color, cv::Mat &depth, cv::Mat &display, vtkQuaterniond q)->double{
-       std::vector<cv::Mat> sources;
+    function<double(cv::Mat &, cv::Mat &, cv::Mat &, vtkQuaterniond)> detection = [&](cv::Mat &color, cv::Mat &depth, cv::Mat &display, vtkQuaterniond q) -> double
+    {
+        std::vector<cv::Mat> sources;
         sources.push_back(color);
         sources.push_back(depth);
         sources[1] = (sources[1] - minDist) * depthFactor;
@@ -263,7 +267,6 @@ int main(int argc, char **argv)
         timer.start();
         detector->match(sources, 65., matches, class_ids, quantized_images);
         timer.stop();
-        cv::imshow("depth", quantized_images[1]);
         color.copyTo(display);
         cv::putText(display, to_string(id++) + " (fail: " + to_string(failCount) + ")",
                     cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
@@ -296,9 +299,9 @@ int main(int argc, char **argv)
         {
             label1 = labels1[make_pair(matches[0].class_id, matches[0].template_id)];
             cv::putText(display, "similarity2: " + to_string(matches[0].similarity) + " (" + to_string(getAngle(label1.first, q)) + " deg.)",
-                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
             cv::putText(display, "center diff2: " + to_string(matches[0].x + label1.second.x - center.x) + ", " + to_string(matches[0].y + label1.second.y - center.y),
-                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
             const std::vector<cv::linemod::Template> &templates = detector1->getTemplates(matches[0].class_id, matches[0].template_id);
             drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector1->getT(0));
             similarity = matches[0].similarity;
@@ -306,9 +309,9 @@ int main(int argc, char **argv)
         else
         {
             cv::putText(display, "similarity2: -",
-                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
             cv::putText(display, "center diff2: -",
-                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
             const std::vector<cv::linemod::Template> &templates = detector->getTemplates(match0.class_id, match0.template_id);
             drawResponse(templates, num_modalities, display, cv::Point2i(match0.x, match0.y), detector->getT(0));
             similarity = match0.similarity;
@@ -317,13 +320,19 @@ int main(int argc, char **argv)
         pair<vtkQuaterniond, cv::Point2i> label0 = labels[make_pair(match0.class_id, match0.template_id)];
 
         cv::putText(display, "similarity1: " + to_string(match0.similarity) + " (" + to_string(getAngle(label0.first, q)) + " deg.)",
-                    cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                    cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
         cv::putText(display, "center diff1: " + to_string(match0.x + label0.second.x - center.x) + ", " + to_string(match0.y + label0.second.y - center.y),
-                    cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                    cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
         cv::putText(display, "detect time: " + to_string(timer.time()) + " / " + to_string(timer1.time()),
-                    cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+                    cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
         return similarity;
     };
+
+    //sample a depth
+    double iso_depth = 3000;
+    generateScreen(iso_depth);
+    double averageS;
+    int counter(0);
 
     while (1)
     { //sample a random quaternion
@@ -336,68 +345,25 @@ int main(int argc, char **argv)
         double z = sqrt(u1) * cos(2 * pi * u3);
         vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
 
-        cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
-        cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
-        iso_depth = (double)rand() / RAND_MAX * 1000. + 3000.;
-        generateImg(q, iso_depth, color, depth);
-
-        cv::Mat depthTester(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(0));
-        cv::Mat colorTester(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(0, 0, 0));
-        generateImg(q, 3000., colorTester, depthTester);
-cv::imshow("cTest", colorTester);
-        if (first)
-        {
-            double distOpt(0);
-            int counter(0);
-            // for (double dist = 3000; dist < 4000; dist += 10)
-            // {
-                double dist = iso_depth;
-                double sf = scan.distance / dist;
-                cv::Mat colorResize, depthResize;
-                float* depthData = (float*)depth.data();
-
-                if (sf < 1)
-                {
-                    cv::Mat cropImg, cropDepth;
-                    color(cv::Rect(center - cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf),
-                                   center + cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf)))
-                        .copyTo(cropImg);
-                    depth(cv::Rect(center - cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf),
-                                   center + cv::Point2i(scan.res_hor * 0.5 * sf, scan.res_vert * 0.5 * sf)))
-                        .copyTo(cropDepth);
-                    cropDepth += scan.distance - dist;
-                    cv::resize(cropImg, colorResize, cv::Size2i(scan.res_hor, scan.res_vert));
-                    cv::resize(cropDepth, depthResize, cv::Size2i(scan.res_hor, scan.res_vert));
-                }
-                else if(sf>1)
-                {
-
-                }
-                else
-                {
-                    color.copyTo(colorResize);
-                    depth.copyTo(depthResize);
-                }
-                cv::Mat disp0;
-                double similarity = detection(colorResize, depthResize, disp0, q);
-                if(similarity>95){
-                    distOpt = distOpt * counter++;
-                    distOpt = (distOpt + dist) / counter;
-                }
-                cv::imshow("display", disp0);
-                cv::waitKey(0);
-//            }
-            cout<<"opt dist = "<<distOpt<<endl;
-            cout<<"real dist = "<<iso_depth<<endl;
-            cout<<"count = "<<counter<<endl;
-        }
+        cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(7000));
+        cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(255, 255, 255));
+        generateImg(q, color, depth);
 
         cv::Mat display;
-        detection(color, depth, display, q);
+        averageS += detection(color, depth, display, q);
+        counter++;
 
         char key = cv::waitKey(1);
         if (key == 'p')
             cv::waitKey(0);
+        else if(key == 'd'){
+            cout<<"average smilarity for distance "<<iso_depth<<" mm: "<<averageS/counter<<" ("<<counter<<")"<<endl;
+            cout<<"type new distance: "<<flush;
+            cin>>iso_depth;
+            generateScreen(iso_depth);
+            counter = 0;
+            averageS = 0;
+        }
         else if (key == 'q')
             break;
 
