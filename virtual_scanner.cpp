@@ -45,6 +45,8 @@
   */
 #include <string>
 #include <random>
+#include <opencv2/surface_matching/ppf_helpers.hpp>
+#include <opencv2/surface_matching.hpp>
 #include "boost.h"
 #include "vtkQuaternion.h"
 #include "vtkGeneralTransform.h"
@@ -114,6 +116,39 @@ int main(int argc, char **argv)
     scan.screen_dist = 6000; //mm
 
     //read ply file
+    cv::Mat pc = cv::ppf_match_3d::loadPLYSimple(modelFileName.c_str(), 1);
+    Timer timer, timer1;
+    ifstream detectorFile("surfDet.txt");
+    cv::ppf_match_3d::PPF3DDetector detectorSurf(0.025, 0.05);
+    if (!detectorFile.good())
+    {
+        //train the model
+        cout << "Training..." << flush;
+        timer.start();
+        detectorSurf.trainModel(pc);
+        timer.stop();
+        cout << timer.time() << "s" << endl;
+        //sereialize
+        cout << "Serializing..." << flush;
+        timer.start();
+        cv::FileStorage fsOut("surfDet.txt", cv::FileStorage::WRITE);
+        detectorSurf.write(fsOut);
+        fsOut.release();
+        timer.stop();
+        cout << timer.time() << "s" << endl;
+    }
+    else
+    {
+        cout << "Found detector file: Skipping training phase" << endl;
+        cout << "Deserializing..." << flush; timer.start();
+        cv::FileStorage fsLoad("surfDet.txt", cv::FileStorage::READ);
+        detectorSurf.read(fsLoad.root());
+        fsLoad.release();
+        timer.stop();
+        cout << timer.time() << "s" << endl;
+    }
+    
+
     vtkSmartPointer<vtkPolyData> data;
     vtkPLYReader *reader = vtkPLYReader::New();
     reader->SetFileName(modelFileName.c_str());
@@ -252,7 +287,6 @@ int main(int argc, char **argv)
         }     // Vertical
     };
 
-    Timer timer, timer1;
     int id(0);
     function<double(cv::Mat &, cv::Mat &, cv::Mat &, vtkQuaterniond)> detection = [&](cv::Mat &color, cv::Mat &depth, cv::Mat &display, vtkQuaterniond q) -> double
     {
@@ -356,10 +390,11 @@ int main(int argc, char **argv)
         char key = cv::waitKey(1);
         if (key == 'p')
             cv::waitKey(0);
-        else if(key == 'd'){
-            cout<<"average smilarity for distance "<<iso_depth<<" mm: "<<averageS/counter<<" ("<<counter<<")"<<endl;
-            cout<<"type new distance: "<<flush;
-            cin>>iso_depth;
+        else if (key == 'd')
+        {
+            cout << "average smilarity for distance " << iso_depth << " mm: " << averageS / counter << " (" << counter << ")" << endl;
+            cout << "type new distance: " << flush;
+            cin >> iso_depth;
             generateScreen(iso_depth);
             counter = 0;
             averageS = 0;
