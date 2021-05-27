@@ -99,6 +99,7 @@ static void writeLinemod(const cv::Ptr<cv::linemod::Detector> &detector, const s
 static cv::Ptr<cv::linemod::Detector> readLinemod(const std::string &filename);
 void writeLabel(const map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> &labels, string fileName);
 map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> readLabel(string fileName);
+cv::Mat ReadPLY(string name);
 
 int main(int argc, char **argv)
 {
@@ -114,41 +115,26 @@ int main(int argc, char **argv)
     scan.distance = 3000; //mm
     scan.rotInterval = 10;
     scan.screen_dist = 6000; //mm
+    // Virtual camera parameters
+    double viewray0[3] = {0.0, 0.0, 1.0};
+    double up0[3] = {0.0, 1.0, 0.0}; //normalize
 
     //read ply file
-    cv::Mat pc = cv::ppf_match_3d::loadPLYSimple(modelFileName.c_str(), 1);
-    Timer timer, timer1;
-    ifstream detectorFile("surfDet.txt");
-    cv::ppf_match_3d::PPF3DDetector detectorSurf(0.025, 0.05);
-    if (!detectorFile.good())
-    {
-        //train the model
-        cout << "Training..." << flush;
-        timer.start();
-        detectorSurf.trainModel(pc);
-        timer.stop();
-        cout << timer.time() << "s" << endl;
-        //sereialize
-        cout << "Serializing..." << flush;
-        timer.start();
-        cv::FileStorage fsOut("surfDet.txt", cv::FileStorage::WRITE);
-        detectorSurf.write(fsOut);
-        fsOut.release();
-        timer.stop();
-        cout << timer.time() << "s" << endl;
-    }
-    else
-    {
-        cout << "Found detector file: Skipping training phase" << endl;
-        cout << "Deserializing..." << flush; timer.start();
-        cv::FileStorage fsLoad("surfDet.txt", cv::FileStorage::READ);
-        detectorSurf.read(fsLoad.root());
-        fsLoad.release();
-        timer.stop();
-        cout << timer.time() << "s" << endl;
-    }
-    
+    //cv::Mat pc = cv::ppf_match_3d::loadPLYSimple(modelFileName.c_str(), 0);
+    //cv::Mat pc1;
+    cv::Mat pc = ReadPLY(modelFileName);
 
+    //cv::ppf_match_3d::computeNormalsPC3d(pc, pc1, 6, false, cv::Vec3f(0,0,-scan.distance));
+    //cv::ppf_match_3d::writePLY(pc, "test.ply");
+    //cv::hconcat(pc, pc_normal, pc);
+    Timer timer, timer1;
+    cv::ppf_match_3d::PPF3DDetector detectorSurf(0.05, 0.05);
+    //train the model
+    cout << "Training..." << flush;
+    timer.start();
+    detectorSurf.trainModel(pc);
+    timer.stop();
+    cout << " -> " << timer.time() << "s" << endl;
     vtkSmartPointer<vtkPolyData> data;
     vtkPLYReader *reader = vtkPLYReader::New();
     reader->SetFileName(modelFileName.c_str());
@@ -174,7 +160,6 @@ int main(int argc, char **argv)
 
     cout << "Initializing mesh..." << flush;
     // Build a spatial locator for our dataset
-#include "vtkTransform.h"
     vtkSmartPointer<vtkCellLocator> tree = vtkSmartPointer<vtkCellLocator>::New();
     tree->SetDataSet(data);
     tree->CacheCellBoundsOn();
@@ -187,29 +172,25 @@ int main(int argc, char **argv)
 
     srand(time(nullptr));
 
-    // Virtual camera parameters
-    double viewray0[3] = {0.0, 0.0, 1.0};
-    double up0[3] = {0.0, 1.0, 0.0}; //normalize
-
     //Initialize LINEMOD detector
-    cv::Ptr<cv::linemod::Detector> detector = readLinemod("mother.yml");
-    cout << "read mother detector.." << detector->numTemplates() << " templates" << endl;
-    cv::Ptr<cv::linemod::Detector> detector1 = readLinemod("daughter.yml");
-    cout << "read daughter detector.." << detector1->numTemplates() << " templates" << endl;
-    int num_modalities = (int)detector->getModalities().size();
-    map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels = readLabel("mother.label");
-    map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels1 = readLabel("daughter.label");
+    // cv::Ptr<cv::linemod::Detector> detector = readLinemod("mother.yml");
+    // cout << "read mother detector.." << detector->numTemplates() << " templates" << endl;
+    // cv::Ptr<cv::linemod::Detector> detector1 = readLinemod("daughter.yml");
+    // cout << "read daughter detector.." << detector1->numTemplates() << " templates" << endl;
+    // int num_modalities = (int)detector->getModalities().size();
+    // map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels = readLabel("mother.label");
+    // map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> labels1 = readLabel("daughter.label");
 
-    cout << "set ROI..." << flush;
-    int maxX(0), maxY(0);
-    for (auto label : labels)
-    {
-        maxX = maxX > label.second.second.x ? maxX : label.second.second.x;
-        maxY = maxY > label.second.second.y ? maxY : label.second.second.y;
-    }
-    cv::Rect roi(cv::Point2i(scan.res_hor * 0.5 - maxX - 20, scan.res_vert * 0.5 - maxY - 20),
-                 cv::Point2i(scan.res_hor * 0.5 + maxX + 20, scan.res_vert * 0.5 + maxY + 20));
-    cout << "done" << endl;
+    // cout << "set ROI..." << flush;
+    // int maxX(0), maxY(0);
+    // for (auto label : labels)
+    // {
+    //     maxX = maxX > label.second.second.x ? maxX : label.second.second.x;
+    //     maxY = maxY > label.second.second.y ? maxY : label.second.second.y;
+    // }
+    // cv::Rect roi(cv::Point2i(scan.res_hor * 0.5 - maxX - 20, scan.res_vert * 0.5 - maxY - 20),
+    //              cv::Point2i(scan.res_hor * 0.5 + maxX + 20, scan.res_vert * 0.5 + maxY + 20));
+    // cout << "done" << endl;
 
     double eye[3] = {0, 0, -1};
     vector<double *> screen;
@@ -242,6 +223,7 @@ int main(int argc, char **argv)
 
     int failCount(0);
     vtkTransform *tr = vtkTransform::New();
+    vtkTransform *trInv = vtkTransform::New();
     cv::Rect bBox_all(cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5), cv::Point2i(scan.res_vert * 0.5, scan.res_hor * 0.5));
     int maxH(scan.res_hor * 0.5), minH(scan.res_hor * 0.5), maxV(scan.res_vert * 0.5), minV(scan.res_vert * 0.5);
     cv::Point2i center(maxH, maxV);
@@ -287,87 +269,208 @@ int main(int argc, char **argv)
         }     // Vertical
     };
 
-    int id(0);
-    function<double(cv::Mat &, cv::Mat &, cv::Mat &, vtkQuaterniond)> detection = [&](cv::Mat &color, cv::Mat &depth, cv::Mat &display, vtkQuaterniond q) -> double
+    function<void(vtkQuaterniond, cv::Mat &)> generatePC = [&](vtkQuaterniond q, cv::Mat &_pc)
     {
-        std::vector<cv::Mat> sources;
-        sources.push_back(color);
-        sources.push_back(depth);
-        sources[1] = (sources[1] - minDist) * depthFactor;
+        double axis[3];
+        double angle = q.GetRotationAngleAndAxis(axis);
+        tr->Identity();
+        tr->RotateWXYZ(angle * (180 / pi), axis);
+        trInv->SetMatrix(tr->GetMatrix());
+        tr->Inverse();
 
-        std::vector<cv::linemod::Match> matches;
-        std::vector<cv::String> class_ids;
-        std::vector<cv::Mat> quantized_images;
+        //Start!!
+        double eye1[3], viewRay1[3];
+        tr->TransformPoint(eye, eye1);
+        tr->TransformPoint(viewRay, viewRay1);
+
+        // Scanning
+        vector<int> rr, gg, bb;
+        double p_coords[3], x[3], t, rgb[3];
+        //        _pc = cv::Mat(scan.res_vert * scan.res_hor, 3, CV_32FC1);
+        int subId;
+        for (int vert = 0, n = 0; vert < scan.res_vert; vert++)
+        {
+            for (int hor = 0; hor < scan.res_hor; hor++, n++)
+            {
+                vtkIdType cellId;
+                double point[3];
+                tr->TransformPoint(screen[n], point);
+                if (tree->IntersectWithLine(eye1, point, 0, t, x, p_coords, subId, cellId))
+                {
+                    trInv->TransformPoint(x, x);
+                    // data[n * 3] = x[0];
+                    // data[n * 3 + 1] = x[1];
+                    // data[n * 3 + 2] = x[2];
+                }
+                else
+                {
+                    trInv->TransformPoint(point, x);
+                    // float xf[3] = {(float)x[0], (float)x[1], (float)x[2]};
+                    // cv::Mat aRow(1, 3, CV_32FC1, xf);
+                    // _pc.push_back(aRow);
+                    // data[n * 3] = point[0];
+                    // data[n * 3 + 1] = point[1];
+                    // data[n * 3 + 2] = point[2];
+                }
+                float xf[3] = {(float)x[0], (float)x[1], (float)x[2]};
+                cv::Mat aRow(1, 3, CV_32FC1, xf);
+                _pc.push_back(aRow);
+            } // Horizontal
+        }     // Vertical
         timer.start();
-        detector->match(sources, 65., matches, class_ids, quantized_images);
+        cv::Mat normals = cv::Mat::zeros(scan.res_vert * scan.res_hor, 3, CV_32FC1);
+        float *data = (float *)normals.data;
+        for (int vert = 0, n = 0; vert < scan.res_vert; vert++)
+        {
+            for (int hor = 0; hor < scan.res_hor; hor++, n++)
+            {
+                cv::Vec3d pixel = _pc.row(n);
+                cv::Vec3d up, down, right, left;
+                bool upChk, downChk, rightChk, leftChk;
+                if (vert == 0)
+                    upChk = false;
+                else
+                {
+                    up = _pc.row((vert - 1) * scan.res_hor + hor);
+                    up -= pixel;
+                    upChk = fabs(up(2)) < 50;
+                }
+
+                if (vert == scan.res_vert - 1)
+                {
+                    downChk = false;
+                }
+                else
+                {
+                    down = _pc.row((vert + 1) * scan.res_hor + hor);
+                    down -= pixel;
+                    downChk = fabs(down(2)) < 50;
+                }
+
+                if (hor == 0)
+                {
+                    leftChk = false;
+                }
+                else
+                {
+                    left = _pc.row(vert * scan.res_hor + hor - 1);
+                    left -= pixel;
+                    leftChk = fabs(left(2)) < 50;
+                }
+
+                if (hor == scan.res_hor - 1)
+                {
+                    rightChk = false;
+                }
+                else
+                {
+                    right = _pc.row(vert * scan.res_hor + hor + 1);
+                    right -= pixel;
+                    rightChk = fabs(right(2)) < 50;
+                }
+
+                cv::Vec3d normal(0, 0, 0);
+                if (upChk && rightChk)
+                    normal += cv::normalize(right.cross(up));
+                if (rightChk && downChk)
+                    normal += cv::normalize(down.cross(right));
+                if (downChk && leftChk)
+                    normal += cv::normalize(left.cross(down));
+                if (upChk && leftChk)
+                    normal += cv::normalize(up.cross(left));
+                normal = cv::normalize(normal);
+                data[n * 3] = normal(0);
+                data[n * 3 + 1] = normal(1);
+                data[n * 3 + 2] = normal(2);
+            }
+        }
+        cv::hconcat(_pc, normals, _pc);
         timer.stop();
-        color.copyTo(display);
-        cv::putText(display, to_string(id++) + " (fail: " + to_string(failCount) + ")",
-                    cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
-        function<double(vtkQuaterniond, vtkQuaterniond)> getAngle = [](vtkQuaterniond a, vtkQuaterniond b) -> double
-        {
-            double dotProd = a.GetW() * b.GetW() + a.GetX() * b.GetX() + a.GetY() * b.GetY() + a.GetZ() * b.GetZ();
-            return 2 * acos(fabs(dotProd)) * 180 / pi;
-        };
-        cv::linemod::Match match0;
-        if (matches.size())
-        {
-            match0 = matches[0];
-        }
-        else
-        {
-            failCount++;
-            return -1;
-        }
-
-        for (auto m : matches)
-            class_ids.push_back(m.class_id);
-
-        timer1.start();
-        detector1->match(sources, 80., matches, class_ids, quantized_images);
-        timer1.stop();
-
-        pair<vtkQuaterniond, cv::Point2i> label1;
-        double similarity;
-        if (matches.size() && match0.similarity < matches[0].similarity)
-        {
-            label1 = labels1[make_pair(matches[0].class_id, matches[0].template_id)];
-            cv::putText(display, "similarity2: " + to_string(matches[0].similarity) + " (" + to_string(getAngle(label1.first, q)) + " deg.)",
-                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-            cv::putText(display, "center diff2: " + to_string(matches[0].x + label1.second.x - center.x) + ", " + to_string(matches[0].y + label1.second.y - center.y),
-                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-            const std::vector<cv::linemod::Template> &templates = detector1->getTemplates(matches[0].class_id, matches[0].template_id);
-            drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector1->getT(0));
-            similarity = matches[0].similarity;
-        }
-        else
-        {
-            cv::putText(display, "similarity2: -",
-                        cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-            cv::putText(display, "center diff2: -",
-                        cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-            const std::vector<cv::linemod::Template> &templates = detector->getTemplates(match0.class_id, match0.template_id);
-            drawResponse(templates, num_modalities, display, cv::Point2i(match0.x, match0.y), detector->getT(0));
-            similarity = match0.similarity;
-        }
-
-        pair<vtkQuaterniond, cv::Point2i> label0 = labels[make_pair(match0.class_id, match0.template_id)];
-
-        cv::putText(display, "similarity1: " + to_string(match0.similarity) + " (" + to_string(getAngle(label0.first, q)) + " deg.)",
-                    cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-        cv::putText(display, "center diff1: " + to_string(match0.x + label0.second.x - center.x) + ", " + to_string(match0.y + label0.second.y - center.y),
-                    cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-        cv::putText(display, "detect time: " + to_string(timer.time()) + " / " + to_string(timer1.time()),
-                    cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
-        return similarity;
+        cout << "normal cal.: " << timer.time() << " s" << endl;
     };
+
+    int id(0);
+    function<double(vtkQuaterniond, vtkQuaterniond)> getAngle = [](vtkQuaterniond a, vtkQuaterniond b) -> double
+    {
+        double dotProd = a.GetW() * b.GetW() + a.GetX() * b.GetX() + a.GetY() * b.GetY() + a.GetZ() * b.GetZ();
+        return 2 * acos(fabs(dotProd)) * 180 / pi;
+    };
+    // function<double(cv::Mat &, cv::Mat &, cv::Mat &, vtkQuaterniond)> detection = [&](cv::Mat &color, cv::Mat &depth, cv::Mat &display, vtkQuaterniond q) -> double
+    // {
+    //     std::vector<cv::Mat> sources;
+    //     sources.push_back(color);
+    //     sources.push_back(depth);
+    //     sources[1] = (sources[1] - minDist) * depthFactor;
+
+    //     std::vector<cv::linemod::Match> matches;
+    //     std::vector<cv::String> class_ids;
+    //     std::vector<cv::Mat> quantized_images;
+    //     timer.start();
+    //     detector->match(sources, 65., matches, class_ids, quantized_images);
+    //     timer.stop();
+    //     color.copyTo(display);
+    //     cv::putText(display, to_string(id++) + " (fail: " + to_string(failCount) + ")",
+    //                 cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 255., 255.), 1);
+
+    //     cv::linemod::Match match0;
+    //     if (matches.size())
+    //     {
+    //         match0 = matches[0];
+    //     }
+    //     else
+    //     {
+    //         failCount++;
+    //         return -1;
+    //     }
+
+    //     for (auto m : matches)
+    //         class_ids.push_back(m.class_id);
+
+    //     timer1.start();
+    //     detector1->match(sources, 80., matches, class_ids, quantized_images);
+    //     timer1.stop();
+
+    //     pair<vtkQuaterniond, cv::Point2i> label1;
+    //     double similarity;
+    //     if (matches.size() && match0.similarity < matches[0].similarity)
+    //     {
+    //         label1 = labels1[make_pair(matches[0].class_id, matches[0].template_id)];
+    //         cv::putText(display, "similarity2: " + to_string(matches[0].similarity) + " (" + to_string(getAngle(label1.first, q)) + " deg.)",
+    //                     cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //         cv::putText(display, "center diff2: " + to_string(matches[0].x + label1.second.x - center.x) + ", " + to_string(matches[0].y + label1.second.y - center.y),
+    //                     cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //         const std::vector<cv::linemod::Template> &templates = detector1->getTemplates(matches[0].class_id, matches[0].template_id);
+    //         drawResponse(templates, num_modalities, display, cv::Point2i(matches[0].x, matches[0].y), detector1->getT(0));
+    //         similarity = matches[0].similarity;
+    //     }
+    //     else
+    //     {
+    //         cv::putText(display, "similarity2: -",
+    //                     cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //         cv::putText(display, "center diff2: -",
+    //                     cv::Point(10, 100), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //         const std::vector<cv::linemod::Template> &templates = detector->getTemplates(match0.class_id, match0.template_id);
+    //         drawResponse(templates, num_modalities, display, cv::Point2i(match0.x, match0.y), detector->getT(0));
+    //         similarity = match0.similarity;
+    //     }
+
+    //     pair<vtkQuaterniond, cv::Point2i> label0 = labels[make_pair(match0.class_id, match0.template_id)];
+
+    //     cv::putText(display, "similarity1: " + to_string(match0.similarity) + " (" + to_string(getAngle(label0.first, q)) + " deg.)",
+    //                 cv::Point(10, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //     cv::putText(display, "center diff1: " + to_string(match0.x + label0.second.x - center.x) + ", " + to_string(match0.y + label0.second.y - center.y),
+    //                 cv::Point(10, 80), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //     cv::putText(display, "detect time: " + to_string(timer.time()) + " / " + to_string(timer1.time()),
+    //                 cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255., 0., 0.), 1);
+    //     return similarity;
+    // };
 
     //sample a depth
     double iso_depth = 3000;
     generateScreen(iso_depth);
     double averageS;
     int counter(0);
-
+    cv::Vec3d isoCenter(0,0,0);
     while (1)
     { //sample a random quaternion
         double u1 = (double)rand() / RAND_MAX;
@@ -379,30 +482,136 @@ int main(int argc, char **argv)
         double z = sqrt(u1) * cos(2 * pi * u3);
         vtkQuaterniond q = vtkQuaterniond(w, x, y, z);
 
-        cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(7000));
-        cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(255, 255, 255));
-        generateImg(q, color, depth);
+        // cv::Mat depth(scan.res_vert, scan.res_hor, CV_16U, cv::Scalar::all(7000));
+        // cv::Mat color(scan.res_vert, scan.res_hor, CV_8UC3, cv::Scalar(255, 255, 255));
+        // generateImg(q, color, depth);
 
-        cv::Mat display;
-        averageS += detection(color, depth, display, q);
-        counter++;
+        cv::Mat pc_scene, pc_scene1;
+        generatePC(q, pc_scene);
+        cv::ppf_match_3d::writePLY(pc_scene, "scene.ply");
 
-        char key = cv::waitKey(1);
-        if (key == 'p')
-            cv::waitKey(0);
-        else if (key == 'd')
+        vector<cv::ppf_match_3d::Pose3DPtr> results;
+        timer.start();
+        detectorSurf.match(pc_scene, results);
+        timer.stop();
+        cout << "PPF Elapsed Time " << timer.time() << " s" << endl;
+
+        // Check results size from match call above
+
+        size_t results_size = results.size();
+        cout << "Number of matching poses: " << results_size << endl;
+
+        if (results_size == 0)
         {
-            cout << "average smilarity for distance " << iso_depth << " mm: " << averageS / counter << " (" << counter << ")" << endl;
-            cout << "type new distance: " << flush;
-            cin >> iso_depth;
-            generateScreen(iso_depth);
-            counter = 0;
-            averageS = 0;
+            cout << "No matching poses found. Exiting." << endl;
+            exit(0);
         }
-        else if (key == 'q')
-            break;
 
-        cv::imshow("display", display);
+        // Get only first N results - but adjust to results size if num of results are less than that specified by N
+
+        size_t N = 5;
+
+        if (results_size < N)
+        {
+            // cout << "Reducing matching poses to be reported (as specified in code): "
+            //      << N << " to the number of matches found: " << results_size << endl;
+            N = results_size;
+        }
+
+        vector<cv::ppf_match_3d::Pose3DPtr> resultsSub(results.begin(), results.begin() + N);
+
+        // Create an instance of ICP
+
+        cv::ppf_match_3d::ICP icp(100, 0.005f, 2.5f, 8);
+        timer.start();
+
+        // Register for all selected poses
+
+        // cout << "Performing ICP on " << N << " poses..." << endl;
+
+        icp.registerModelToScene(pc, pc_scene, resultsSub);
+        timer.stop();
+
+        cout << "ICP Elapsed Time " << timer.time() << " s" << endl;
+
+        // Debug first five poses
+        double minResidual(DBL_MAX);
+        int minID(-1);
+        for (size_t i = 0; i < resultsSub.size(); i++)
+        {
+            cv::ppf_match_3d::Pose3DPtr result = resultsSub[i];
+            // cout << endl
+            //      << "Pose Result " << i << endl;
+            //result->printPose();
+            //result->residual
+            if (minResidual > result->residual && fabs(result->t(0)) < 500 && fabs(result->t(1)) < 500 && fabs(result->t(2)) < 500 )
+            {
+                minResidual = result->residual;
+                minID = i;
+            }
+            // if (i == 0)
+            // {
+            //     vtkQuaterniond q1(result->q(0), result->q(1), result->q(2), result->q(3));
+            //     q1.Invert();
+            //     q1.Normalize();
+            //     cout << q << endl;
+            //     cout << q1 << endl;
+            //     cout << "angle Diff. " << getAngle(q1, q) << endl;
+            //     cout << "trans Diff. " << result->t << endl;
+            //     cv::Mat pct = cv::ppf_match_3d::transformPCPose(pc, result->pose);
+            //     cv::ppf_match_3d::writePLY(pct, "para6700PCTrans.ply");
+            //     //q = q.Inverse();
+            //     cv::Vec4d q0(q.GetW(), q.GetX(), q.GetY(), q.GetZ());
+            //     cv::Vec3d t0(0, 0, 0);
+            //     result->updatePoseQuat(q0, t0);
+            //     cv::Mat test = cv::ppf_match_3d::transformPCPose(pc, result->pose);
+            //     cv::ppf_match_3d::writePLY(test, "test.ply");
+            // }
+            cv::Mat pct = cv::ppf_match_3d::transformPCPose(pc, result->pose);
+            cv::ppf_match_3d::writePLY(pct, ("result" + to_string(i) + ".ply").c_str());
+            vtkQuaterniond q1(result->q(0), result->q(1), result->q(2), result->q(3));
+            q1.Invert();
+            cout << endl;
+            cout << "residual: " << result->residual << endl;
+            cout << "angle Diff. " << getAngle(q1, q) << endl;
+            cout << "trans Diff. " << result->t << endl;
+        }
+        cout << "---------------------------------------------------------" << endl;
+        if (minID < 0)
+            cout << "PASS!" << endl;
+        else
+        {
+            vtkQuaterniond q1(resultsSub[minID]->q(0), resultsSub[minID]->q(1), resultsSub[minID]->q(2), resultsSub[minID]->q(3));
+            q1.Invert();
+            cout << "residual: " << resultsSub[minID]->residual << endl;
+            cout << "angle Diff. " << getAngle(q1, q) << endl;
+            cout << "trans Diff. " << resultsSub[minID]->t << endl;
+            isoCenter += resultsSub[minID]->t; counter++;
+            cout << "average iso ("<<counter<<"): "<<isoCenter/counter<<endl;
+        }
+        cout << "=========================================================" << endl;
+        getchar();
+        // cv::Mat display;
+        // averageS += detection(color, depth, display, q);
+        // counter++;
+
+        // char key = cv::waitKey(1);
+        // if (key == 'p')
+        //     cv::waitKey(0);
+        // else if (key == 'd')
+        // {
+        //     cout << "average smilarity for distance " << iso_depth << " mm: " << averageS / counter << " (" << counter << ")" << endl;
+        //     cout << "type new distance: " << flush;
+        //     cin >> iso_depth;
+        //     generateScreen(iso_depth);
+        //     counter = 0;
+        //     averageS = 0;
+        // }
+        // else if (key == 'q')
+        //     break;
+
+        // cv::imshow("display", display);
+        // cv::waitKey(0);
     }
     return 0;
 }
@@ -488,6 +697,7 @@ static cv::Ptr<cv::linemod::Detector> readLinemod(const std::string &filename)
 static void writeLinemod(const cv::Ptr<cv::linemod::Detector> &detector, const std::string &filename)
 {
     cv::FileStorage fs(filename, cv::FileStorage::WRITE);
+
     detector->write(fs);
 
     std::vector<cv::String> ids = detector->classIds();
@@ -523,4 +733,56 @@ map<pair<string, int>, pair<vtkQuaterniond, cv::Point2i>> readLabel(string fileN
         labels[make_pair(classID, templateID)] = make_pair(vtkQuaterniond(w, x, y, z), cv::Point2i(i, j));
     ifs.close();
     return labels;
+}
+
+cv::Mat ReadPLY(string name)
+{
+    cv::Mat pc;
+    ifstream ifs(name);
+    if (!ifs.good())
+        return pc;
+    vector<cv::Vec3d> vertices;
+    string dump;
+    int vNum, fNum;
+    while (ifs >> dump)
+    {
+        if (dump == "vertex")
+            ifs >> vNum;
+        else if (dump == "face")
+            ifs >> fNum;
+        else if (dump == "end_header")
+            break;
+    }
+    for (int i = 0; i < vNum; i++)
+    {
+        double x, y, z;
+        int r, g, b;
+        ifs >> x >> y >> z >> r >> g >> b;
+        vertices.push_back(cv::Vec3d(x, y, z));
+    }
+    vector<cv::Vec3d> normals(vNum, cv::Vec3d(0, 0, 0));
+    for (int i = 0; i < fNum; i++)
+    {
+        int tmp, a, b, c;
+        ifs >> tmp >> a >> b >> c;
+        cv::Vec3d normal = (vertices[b] - vertices[a]).cross(vertices[c] - vertices[a]);
+        normal = cv::normalize(normal);
+        normals[a] += normal;
+        normals[b] += normal;
+        normals[c] += normal;
+    }
+    ifs.close();
+    pc = cv::Mat(vNum, 6, CV_32FC1);
+    float *data = (float *)pc.data;
+    for (int i = 0; i < vNum; i++)
+    {
+        data[i * 6] = vertices[i](0);
+        data[i * 6 + 1] = vertices[i](1);
+        data[i * 6 + 2] = vertices[i](2);
+        cv::Vec3d normal = cv::normalize(normals[i]);
+        data[i * 6 + 3] = normal(0);
+        data[i * 6 + 4] = normal(1);
+        data[i * 6 + 5] = normal(2);
+    }
+    return pc;
 }
